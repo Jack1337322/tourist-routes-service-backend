@@ -5,7 +5,6 @@ from rest_framework import status
 from decimal import Decimal
 from attractions.models import Category, Attraction
 from .models import Route, RouteAttraction, UserPreference
-from .generators import AlgorithmicRouteGenerator
 
 User = get_user_model()
 
@@ -149,39 +148,4 @@ class RouteAPITest(TestCase):
         self.assertEqual(response.data['name'], route.name)
 
 
-class AlgorithmicRouteGeneratorTest(TestCase):
-    """Tests for AlgorithmicRouteGenerator."""
-
-    def setUp(self):
-        self.user = User.objects.create_user(
-            email='test@example.com',
-            username='testuser',
-            password='testpass123'
-        )
-        self.category = Category.objects.create(name='История', slug='history')
-        self.attractions = []
-        for i in range(5):
-            attraction = Attraction.objects.create(
-                name=f'Достопримечательность {i+1}',
-                slug=f'attraction-{i+1}',
-                description=f'Описание {i+1}',
-                latitude=55.8304 + i * 0.01,
-                longitude=49.0661 + i * 0.01,
-                category=self.category,
-                rating=4.0 + i * 0.1,
-                visit_duration=60,
-            )
-            self.attractions.append(attraction)
-
-    def test_generate_route(self):
-        """Test route generation."""
-        generator = AlgorithmicRouteGenerator()
-        route = generator.generate_route(
-            self.user,
-            duration_hours=2,
-            category_ids=[self.category.id],
-        )
-        self.assertIsNotNone(route)
-        self.assertEqual(route.user, self.user)
-        self.assertGreater(route.route_attractions.count(), 0)
 

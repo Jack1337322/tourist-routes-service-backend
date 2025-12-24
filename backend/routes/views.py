@@ -2,11 +2,12 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Q
+from decimal import Decimal
 from .models import Route, UserPreference
 from .serializers import (
     RouteSerializer, RouteCreateSerializer, UserPreferenceSerializer
 )
-from .generators import HybridRouteGenerator, AlgorithmicRouteGenerator, LLMRouteGenerator
+from .generators import LLMRouteGenerator
 
 
 class RouteViewSet(viewsets.ModelViewSet):
@@ -59,10 +60,8 @@ class RouteViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def generate(self, request):
-        """Generate a route using LLM or algorithm."""
+        """Generate a route using LLM."""
         duration_hours = int(request.data.get('duration_hours', 4))
-        generator_type = request.data.get('generator_type', 'hybrid')  # 'llm', 'algorithmic', 'hybrid'
-        use_llm = request.data.get('use_llm', True)
         
         # Get route name and description from request
         route_name = request.data.get('name', None)
@@ -79,45 +78,19 @@ class RouteViewSet(viewsets.ModelViewSet):
         category_ids = request.data.get('category_ids', None)
         max_budget = request.data.get('max_budget', None)
         interests = request.data.get('interests', None)
-        start_latitude = request.data.get('start_latitude', None)
-        start_longitude = request.data.get('start_longitude', None)
         
         try:
-            if generator_type == 'llm':
-                generator = LLMRouteGenerator()
-                preferences = {
-                    'interests': interests or [],
-                    'max_budget': float(max_budget) if max_budget else 0.0,
-                    'category_ids': category_ids or [],
-                    'route_name': route_name,  # Pass route name to generator
-                    'route_description': route_description,  # Pass route description to generator
-                    'place_types': place_types  # Pass place types for combining
-                }
-                llm_response = generator.generate_route(preferences, duration_hours)
-                route = generator.create_route_from_llm_response(request.user, llm_response, duration_hours)
-            elif generator_type == 'algorithmic':
-                generator = AlgorithmicRouteGenerator()
-                route = generator.generate_route(
-                    request.user,
-                    duration_hours,
-                    category_ids=category_ids,
-                    max_budget=max_budget,
-                    interests=interests,
-                    start_latitude=start_latitude,
-                    start_longitude=start_longitude
-                )
-            else:  # hybrid
-                generator = HybridRouteGenerator()
-                route = generator.generate_route(
-                    request.user,
-                    duration_hours,
-                    use_llm=use_llm,
-                    category_ids=category_ids,
-                    max_budget=max_budget,
-                    interests=interests,
-                    start_latitude=start_latitude,
-                    start_longitude=start_longitude
-                )
+            generator = LLMRouteGenerator()
+            preferences = {
+                'interests': interests or [],
+                'max_budget': float(max_budget) if max_budget else 0.0,
+                'category_ids': category_ids or [],
+                'route_name': route_name,  # Pass route name to generator
+                'route_description': route_description,  # Pass route description to generator
+                'place_types': place_types  # Pass place types for combining
+            }
+            llm_response = generator.generate_route(preferences, duration_hours)
+            route = generator.create_route_from_llm_response(request.user, llm_response, duration_hours)
             
             serializer = RouteSerializer(route)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -130,13 +103,64 @@ class RouteViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def optimize(self, request, pk=None):
-        """Optimize route order."""
+        """Optimize route order using nearest neighbor algorithm."""
         route = self.get_object()
         
-        # Reorder attractions using nearest neighbor
-        from .generators import HybridRouteGenerator
-        generator = HybridRouteGenerator()
-        generator._optimize_route_order(route)
+        route_attractions = list(route.route_attractions.select_related('attraction').all())
+        
+        if len(route_attractions) <= 1:
+            serializer = self.get_serializer(route)
+            return Response(serializer.data)
+        
+        # Calculate distance helper
+        def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+            import math
+            R = 6371
+            dlat = math.radians(lat2 - lat1)
+            dlon = math.radians(lon2 - lon1)
+            a = (math.sin(dlat / 2) ** 2 +
+                 math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+                 math.sin(dlon / 2) ** 2)
+            c = 2 * math.asin(math.sqrt(a))
+            return R * c
+        
+        # Get coordinates
+        points = [
+            (float(ra.attraction.latitude), float(ra.attraction.longitude), ra)
+            for ra in route_attractions
+        ]
+        
+        # Reorder using nearest neighbor
+        ordered = [points[0]]
+        remaining = points[1:]
+        
+        while remaining:
+            current = ordered[-1]
+            nearest = min(
+                remaining,
+                key=lambda p: calculate_distance(
+                    current[0], current[1], p[0], p[1]
+                )
+            )
+            ordered.append(nearest)
+            remaining.remove(nearest)
+        
+        # Update order
+        for new_order, (_, _, route_attraction) in enumerate(ordered, 1):
+            route_attraction.order = new_order
+            route_attraction.save()
+        
+        # Recalculate distance
+        total_distance = 0.0
+        for i in range(len(ordered) - 1):
+            distance = calculate_distance(
+                ordered[i][0], ordered[i][1],
+                ordered[i + 1][0], ordered[i + 1][1]
+            )
+            total_distance += distance
+        
+        route.distance_km = Decimal(str(total_distance))
+        route.save()
         
         serializer = self.get_serializer(route)
         return Response(serializer.data)
