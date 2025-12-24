@@ -64,6 +64,17 @@ class RouteViewSet(viewsets.ModelViewSet):
         generator_type = request.data.get('generator_type', 'hybrid')  # 'llm', 'algorithmic', 'hybrid'
         use_llm = request.data.get('use_llm', True)
         
+        # Get route name and description from request
+        route_name = request.data.get('name', None)
+        route_description = request.data.get('description', None)
+        
+        # Get place types for combining different types of places
+        # Examples: ["attractions", "restaurants", "bars", "cafes", "museums", "parks"]
+        place_types = request.data.get('place_types', None)
+        if place_types is None:
+            # Default: only attractions if not specified
+            place_types = ['attractions']
+        
         # Get preferences from request or user
         category_ids = request.data.get('category_ids', None)
         max_budget = request.data.get('max_budget', None)
@@ -77,7 +88,10 @@ class RouteViewSet(viewsets.ModelViewSet):
                 preferences = {
                     'interests': interests or [],
                     'max_budget': float(max_budget) if max_budget else 0.0,
-                    'category_ids': category_ids or []
+                    'category_ids': category_ids or [],
+                    'route_name': route_name,  # Pass route name to generator
+                    'route_description': route_description,  # Pass route description to generator
+                    'place_types': place_types  # Pass place types for combining
                 }
                 llm_response = generator.generate_route(preferences, duration_hours)
                 route = generator.create_route_from_llm_response(request.user, llm_response, duration_hours)

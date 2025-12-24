@@ -46,6 +46,35 @@ class LLMRouteGenerator:
         
         return R * c
     
+    def _detect_place_types_from_text(self, text: str) -> List[str]:
+        """Detect place types from route name or description."""
+        if not text:
+            return ['attractions']
+        
+        text_lower = text.lower()
+        detected_types = []
+        
+        # Keywords mapping
+        keywords_map = {
+            'attractions': ['достопримечательность', 'памятник', 'архитектур', 'исторический', 'культурный', 'экскурсия', 'обзор'],
+            'restaurants': ['ресторан', 'рестораны', 'еда', 'кухня', 'гастроном', 'обед', 'ужин', 'трапеза'],
+            'bars': ['бар', 'бары', 'паб', 'пабы', 'пивной', 'коктейль', 'напиток', 'алкоголь'],
+            'cafes': ['кафе', 'кофе', 'кофейня', 'завтрак', 'перекус', 'десерт'],
+            'museums': ['музей', 'музеи', 'экспозиция', 'выставка', 'коллекция', 'галерея'],
+            'parks': ['парк', 'парки', 'сквер', 'скверы', 'природа', 'набережная', 'прогулка'],
+            'entertainment': ['развлечение', 'развлечения', 'клуб', 'клубы', 'кинотеатр', 'театр', 'концерт'],
+            'shopping': ['магазин', 'магазины', 'торговый', 'шоппинг', 'покупка', 'сувенир'],
+            'hotels': ['отель', 'отели', 'гостиница', 'размещение', 'ночлег']
+        }
+        
+        # Check for each type
+        for place_type, keywords in keywords_map.items():
+            if any(keyword in text_lower for keyword in keywords):
+                detected_types.append(place_type)
+        
+        # If nothing detected, default to attractions
+        return detected_types if detected_types else ['attractions']
+    
     def generate_route(self, user_preferences: Dict, duration_hours: int = 4) -> Dict:
         """Generate route using Perplexity LLM."""
         if not self.api_key:
@@ -66,10 +95,125 @@ class LLMRouteGenerator:
                 for att in attractions[:50]  # Limit to avoid token limits
             ])
             
-            prompt = f"""Создай туристический маршрут по Казани на {duration_hours} часов.
+            # Get route name and description from preferences
+            route_name = user_preferences.get('route_name', None)
+            route_description = user_preferences.get('route_description', None)
+            place_types = user_preferences.get('place_types', None)
+            
+            # If place_types not explicitly provided, detect from name/description
+            if place_types is None or place_types == ['attractions']:
+                # Combine name and description for detection
+                combined_text = ""
+                if route_name:
+                    combined_text += route_name + " "
+                if route_description:
+                    combined_text += route_description
+                
+                if combined_text.strip():
+                    place_types = self._detect_place_types_from_text(combined_text)
+                else:
+                    place_types = ['attractions']
+            
+            # Build base prompt
+            base_prompt = f"""Создай туристический маршрут по Казани на {duration_hours} часов."""
+            
+            # Add route name if provided
+            if route_name:
+                base_prompt += f"\n\nНазвание маршрута (используй это название или похожее): {route_name}"
+            
+            # Add route description if provided
+            if route_description:
+                base_prompt += f"\n\nОписание маршрута от пользователя: {route_description}"
+            
+            # Add user preferences
+            base_prompt += f"""
 
 Интересы пользователя: {', '.join(user_preferences.get('interests', [])) if user_preferences.get('interests') else 'не указаны'}
-Бюджет: {user_preferences.get('max_budget', 0)} рублей
+Бюджет: {user_preferences.get('max_budget', 0)} рублей"""
+            
+            # Map place types to Russian descriptions
+            place_types_map = {
+                'attractions': 'достопримечательности (памятники, архитектурные объекты, исторические места)',
+                'restaurants': 'рестораны (места для обеда и ужина)',
+                'bars': 'бары и пабы (места для вечерних напитков)',
+                'cafes': 'кафе (места для легких перекусов и кофе)',
+                'museums': 'музеи (культурные и исторические экспозиции)',
+                'parks': 'парки и скверы (природные зоны для прогулок)',
+                'entertainment': 'развлекательные заведения (клубы, кинотеатры, развлечения)',
+                'shopping': 'магазины и торговые центры',
+                'hotels': 'отели и места размещения'
+            }
+            
+            # Build instruction about route theme and place types
+            theme_instruction = ""
+            
+            # Check if multiple place types are detected or requested
+            if len(place_types) > 1 or (len(place_types) == 1 and place_types[0] != 'attractions'):
+                # Build time distribution based on selected place types (without explicitly listing types)
+                time_distribution = []
+                
+                # Morning (9-12)
+                morning_types = []
+                if 'attractions' in place_types:
+                    morning_types.append('достопримечательности')
+                if 'museums' in place_types:
+                    morning_types.append('музеи')
+                if 'parks' in place_types:
+                    morning_types.append('парки')
+                if morning_types:
+                    time_distribution.append(f"- Утро (9-12): {', '.join(morning_types)}")
+                
+                # Lunch (12-14)
+                lunch_types = []
+                if 'restaurants' in place_types:
+                    lunch_types.append('рестораны')
+                if 'cafes' in place_types:
+                    lunch_types.append('кафе')
+                if lunch_types:
+                    time_distribution.append(f"- Обед (12-14): {', '.join(lunch_types)}")
+                
+                # Afternoon (14-18)
+                afternoon_types = []
+                if 'attractions' in place_types:
+                    afternoon_types.append('достопримечательности')
+                if 'museums' in place_types:
+                    afternoon_types.append('музеи')
+                if 'parks' in place_types:
+                    afternoon_types.append('парки')
+                if 'shopping' in place_types:
+                    afternoon_types.append('магазины')
+                if afternoon_types:
+                    time_distribution.append(f"- День (14-18): {', '.join(afternoon_types)}")
+                
+                # Evening (18-22)
+                evening_types = []
+                if 'bars' in place_types:
+                    evening_types.append('бары')
+                if 'restaurants' in place_types:
+                    evening_types.append('рестораны')
+                if 'entertainment' in place_types:
+                    evening_types.append('развлечения')
+                if evening_types:
+                    time_distribution.append(f"- Вечер (18-22): {', '.join(evening_types)}")
+                
+                if time_distribution:
+                    theme_instruction = "\n\nВАЖНО: Маршрут должен включать разные типы мест, соответствующие теме маршрута. Распредели места по маршруту логично по времени дня:\n"
+                    theme_instruction += "\n".join(time_distribution)
+                    theme_instruction += "\n\nСоздай сбалансированный маршрут, который включает соответствующие типы мест в логичной последовательности."
+            
+            # If only attractions, add general instruction based on route name
+            elif route_name:
+                route_name_lower = route_name.lower()
+                if any(word in route_name_lower for word in ['бар', 'бары', 'клуб', 'клубы', 'развлечения', 'ночная']):
+                    theme_instruction = "\n\nВАЖНО: Маршрут должен быть посвящен барам, клубам и ночным развлечениям Казани. Выбери бары, пабы, клубы и развлекательные заведения."
+                elif any(word in route_name_lower for word in ['еда', 'ресторан', 'кафе', 'кухня', 'гастроном']):
+                    theme_instruction = "\n\nВАЖНО: Маршрут должен быть посвящен гастрономии Казани. Выбери рестораны, кафе и места с местной кухней."
+                elif any(word in route_name_lower for word in ['история', 'исторический', 'музей', 'памятник']):
+                    theme_instruction = "\n\nВАЖНО: Маршрут должен быть посвящен истории и культуре Казани. Выбери исторические достопримечательности и музеи."
+                elif any(word in route_name_lower for word in ['природа', 'парк', 'сквер', 'набережная']):
+                    theme_instruction = "\n\nВАЖНО: Маршрут должен быть посвящен природе и паркам Казани. Выбери парки, скверы и природные достопримечательности."
+            
+            prompt = f"""{base_prompt}{theme_instruction}
 
 Доступные достопримечательности:
 {attractions_list}
@@ -86,7 +230,15 @@ class LLMRouteGenerator:
    - "description" - краткое описание достопримечательности (1-2 предложения, опционально)
    - "address" - адрес достопримечательности в Казани (опционально)
 
-Выбери 4-8 достопримечательностей (можно использовать из списка выше или добавить известные достопримечательности Казани) и расположи их в логичном порядке. ОБЯЗАТЕЛЬНО укажи координаты для каждой достопримечательности.
+Выбери 4-8 мест (можно использовать из списка выше или добавить известные места Казани) и расположи их в логичном порядке. 
+
+Если маршрут должен комбинировать разные типы мест (достопримечательности + рестораны + бары и т.д.), распредели их по времени дня логично:
+- Утро (9-12): достопримечательности, музеи, парки
+- Обед (12-14): рестораны, кафе
+- День (14-18): достопримечательности, музеи, прогулки
+- Вечер (18-22): бары, рестораны, развлечения
+
+ОБЯЗАТЕЛЬНО укажи координаты для каждого места.
 
 Пример правильного ответа:
 {{
