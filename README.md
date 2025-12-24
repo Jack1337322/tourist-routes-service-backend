@@ -205,4 +205,3 @@ tourist-routes-service/
 ## Лицензия
 
 MIT
-
