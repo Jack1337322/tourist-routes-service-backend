@@ -60,27 +60,6 @@ class RouteViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['post'])
     def generate(self, request):
         """Generate a route using LLM or algorithm."""
-        # #region agent log
-        import json
-        with open('/Users/jack/Desktop/tourist-routes-service/.cursor/debug.log', 'a') as f:
-            f.write(json.dumps({
-                'sessionId': 'debug-session',
-                'runId': 'run1',
-                'hypothesisId': 'A',
-                'location': 'routes/views.py:61',
-                'message': 'Route generation request received',
-                'data': {
-                    'duration_hours': request.data.get('duration_hours', 4),
-                    'generator_type': request.data.get('generator_type', 'hybrid'),
-                    'use_llm': request.data.get('use_llm', True),
-                    'category_ids': request.data.get('category_ids', None),
-                    'max_budget': request.data.get('max_budget', None),
-                    'interests': request.data.get('interests', None),
-                },
-                'timestamp': int(__import__('time').time() * 1000)
-            }) + '\n')
-        # #endregion
-        
         duration_hours = int(request.data.get('duration_hours', 4))
         generator_type = request.data.get('generator_type', 'hybrid')  # 'llm', 'algorithmic', 'hybrid'
         use_llm = request.data.get('use_llm', True)

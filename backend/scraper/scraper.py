@@ -195,6 +195,97 @@ class KazanAttractionScraper:
         
         return all_attractions
     
+    def enrich_with_perplexity(self, attraction_data: Dict) -> Dict:
+        """Enrich attraction data using Perplexity API."""
+        api_key = getattr(settings, 'PERPLEXITY_API_KEY', None)
+        if not api_key:
+            logger.warning("Perplexity API key not set. Skipping enrichment.")
+            return attraction_data
+        
+        try:
+            from perplexity import Perplexity
+            import json
+            
+            attraction_name = attraction_data.get('name', '')
+            if not attraction_name:
+                return attraction_data
+            
+            # Build prompt for Perplexity
+            prompt = f"""Предоставь актуальную информацию о достопримечательности "{attraction_name}" в Казани.
+
+Нужна следующая информация:
+1. Подробное описание (2-3 предложения)
+2. Примерная стоимость посещения (если платно) или указание что бесплатно
+3. Рекомендуемое время посещения в минутах
+4. Актуальная информация о режиме работы (если доступна)
+5. Особенности и интересные факты
+
+Верни ответ в формате JSON:
+{{
+    "description": "Подробное описание",
+    "short_description": "Краткое описание (до 200 символов)",
+    "price": 0.0,
+    "is_free": true,
+    "visit_duration": 60,
+    "opening_hours": "Режим работы или null",
+    "highlights": ["Особенность 1", "Особенность 2"]
+}}"""
+            
+            model = getattr(settings, 'PERPLEXITY_MODEL', 'sonar-pro')
+            
+            # Use official Perplexity Python SDK
+            user_message = f"""Ты помощник по туристическим достопримечательностям Казани. Отвечай только валидным JSON без дополнительных комментариев.
+
+{prompt}"""
+            
+            client = Perplexity(api_key=api_key)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=0.3,
+                max_tokens=1000
+            )
+            
+            content = response.choices[0].message.content
+            
+            # Extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                perplexity_data = json.loads(json_match.group())
+                
+                # Merge Perplexity data with existing data (don't overwrite existing fields)
+                if perplexity_data.get('description') and not attraction_data.get('description'):
+                    attraction_data['description'] = perplexity_data['description']
+                
+                if perplexity_data.get('short_description') and not attraction_data.get('short_description'):
+                    attraction_data['short_description'] = perplexity_data['short_description']
+                
+                if perplexity_data.get('price') is not None:
+                    attraction_data['price'] = perplexity_data.get('price', 0.0)
+                    attraction_data['is_free'] = perplexity_data.get('is_free', True)
+                
+                if perplexity_data.get('visit_duration'):
+                    attraction_data['visit_duration'] = perplexity_data['visit_duration']
+                
+                if perplexity_data.get('opening_hours'):
+                    attraction_data['opening_hours'] = perplexity_data['opening_hours']
+                
+                if perplexity_data.get('highlights'):
+                    attraction_data['highlights'] = perplexity_data['highlights']
+                
+                logger.info(f"Successfully enriched attraction '{attraction_name}' with Perplexity data")
+            else:
+                logger.warning(f"Could not parse JSON from Perplexity response for '{attraction_name}'")
+        
+        except Exception as e:
+            logger.error(f"Error enriching attraction '{attraction_data.get('name', 'unknown')}' with Perplexity: {e}")
+            # Continue with existing data if enrichment fails
+        
+        return attraction_data
+    
     def enrich_attraction_data(self, attraction_data: Dict) -> Dict:
         """Enrich attraction data with additional information."""
         # Get coordinates if address is available
@@ -209,6 +300,9 @@ class KazanAttractionScraper:
         attraction_data.setdefault('visit_duration', 60)
         attraction_data.setdefault('price', 0.0)
         attraction_data.setdefault('is_free', True)
+        
+        # Enrich with Perplexity API (hybrid approach)
+        attraction_data = self.enrich_with_perplexity(attraction_data)
         
         return attraction_data
 

@@ -89,6 +89,11 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+        'routes': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
     },
 }
 
@@ -269,8 +274,9 @@ if DEBUG:
     CSRF_COOKIE_SECURE = False
     CSRF_COOKIE_HTTPONLY = False
 
-# OpenAI API Key
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+# Perplexity API Key
+PERPLEXITY_API_KEY = os.getenv('PERPLEXITY_API_KEY', '')
+PERPLEXITY_MODEL = os.getenv('PERPLEXITY_MODEL', 'sonar-pro')
 
 # Celery Configuration
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
