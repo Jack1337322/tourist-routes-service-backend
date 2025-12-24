@@ -211,6 +211,7 @@ class AlgorithmicRouteGenerator:
         
         # Filter attractions
         attractions = Attraction.objects.filter(is_active=True)
+        
         if category_ids:
             attractions = attractions.filter(category_id__in=category_ids)
         
