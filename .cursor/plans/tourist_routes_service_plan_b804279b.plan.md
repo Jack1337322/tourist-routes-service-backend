@@ -274,5 +274,3 @@ tourist-routes-service/
 - React 18+
 - React Router
 - Axios
-- Leaflet/Yandex Maps
-- Chart.js/Recharts (графики)

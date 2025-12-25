@@ -5,13 +5,6 @@ from django.http import HttpResponse
 from django.db.models import Count, Avg, Q
 from django.utils import timezone
 from datetime import timedelta
-import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
-import seaborn as sns
-import io
-import base64
 from routes.models import Route, RouteAttraction
 from attractions.models import Attraction, Category
 
@@ -110,97 +103,130 @@ def attraction_statistics(request):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticatedOrReadOnly])
-def route_popularity_chart(request):
-    """Generate route popularity chart."""
-    limit = int(request.query_params.get('limit', 10))
+def popular_attractions(request):
+    """Get popular attractions based on mentions in routes."""
+    limit = int(request.query_params.get('limit', 20))
+    category_id = request.query_params.get('category_id', None)
     
-    routes = Route.objects.filter(is_public=True).order_by('-views_count')[:limit]
+    # Base queryset: count mentions in routes
+    queryset = Attraction.objects.filter(is_active=True).annotate(
+        mention_count=Count('route_attractions', distinct=True)
+    ).filter(mention_count__gt=0)
     
-    # Create DataFrame
-    df = pd.DataFrame([{
-        'name': route.name[:30] + '...' if len(route.name) > 30 else route.name,
-        'views': route.views_count
-    } for route in routes])
+    # Filter by category if provided
+    if category_id:
+        queryset = queryset.filter(category_id=category_id)
     
-    # Create plot
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=df, x='views', y='name', palette='viridis')
-    plt.title('Популярные маршруты', fontsize=16, fontweight='bold')
-    plt.xlabel('Количество просмотров', fontsize=12)
-    plt.ylabel('Маршрут', fontsize=12)
-    plt.tight_layout()
+    # Order by mention count and get top N
+    attractions = queryset.select_related('category').order_by('-mention_count')[:limit]
     
-    # Save to buffer
-    buffer = io.BytesIO()
-    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-    buffer.seek(0)
-    plt.close()
+    data = [{
+        'id': attr.id,
+        'name': attr.name,
+        'mention_count': attr.mention_count,
+        'category': attr.category.name if attr.category else None,
+        'category_id': attr.category.id if attr.category else None,
+        'rating': float(attr.rating),
+        'address': attr.address,
+    } for attr in attractions]
     
-    # Return as base64
-    image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-    return Response({'image': f'data:image/png;base64,{image_base64}'})
+    return Response({'attractions': data})
 
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticatedOrReadOnly])
-def category_distribution_chart(request):
-    """Generate category distribution chart."""
+def category_popularity(request):
+    """Get category popularity based on routes using attractions from each category."""
     categories = Category.objects.annotate(
-        count=Count('attractions', filter=Q(attractions__is_active=True))
-    ).filter(count__gt=0).order_by('-count')[:10]
+        route_count=Count('attractions__route_attractions__route', distinct=True),
+        attraction_count=Count('attractions', filter=Q(attractions__is_active=True), distinct=True)
+    ).filter(route_count__gt=0).order_by('-route_count')
     
-    # Create DataFrame
-    df = pd.DataFrame([{
-        'category': cat.name,
-        'count': cat.count
-    } for cat in categories])
+    data = [{
+        'id': cat.id,
+        'name': cat.name,
+        'route_count': cat.route_count,
+        'attraction_count': cat.attraction_count,
+    } for cat in categories]
     
-    # Create plot
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=df, x='count', y='category', palette='mako')
-    plt.title('Распределение достопримечательностей по категориям', fontsize=16, fontweight='bold')
-    plt.xlabel('Количество', fontsize=12)
-    plt.ylabel('Категория', fontsize=12)
-    plt.tight_layout()
-    
-    # Save to buffer
-    buffer = io.BytesIO()
-    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-    buffer.seek(0)
-    plt.close()
-    
-    # Return as base64
-    image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-    return Response({'image': f'data:image/png;base64,{image_base64}'})
+    return Response({'categories': data})
 
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticatedOrReadOnly])
-def rating_distribution_chart(request):
-    """Generate rating distribution chart."""
-    attractions = Attraction.objects.filter(is_active=True)
+def popular_attractions_by_category(request):
+    """Get top attractions grouped by category."""
+    limit_per_category = int(request.query_params.get('limit', 5))
     
-    # Create DataFrame
-    df = pd.DataFrame(list(attractions.values('rating')))
+    categories = Category.objects.annotate(
+        attraction_count=Count('attractions', filter=Q(attractions__is_active=True))
+    ).filter(attraction_count__gt=0)
     
-    # Create plot
-    plt.figure(figsize=(10, 6))
-    sns.histplot(data=df, x='rating', bins=20, kde=True, color='skyblue')
-    plt.title('Распределение рейтингов достопримечательностей', fontsize=16, fontweight='bold')
-    plt.xlabel('Рейтинг', fontsize=12)
-    plt.ylabel('Количество', fontsize=12)
-    plt.xlim(0, 5)
-    plt.tight_layout()
+    result = []
+    for category in categories:
+        # Get top attractions in this category
+        attractions = Attraction.objects.filter(
+            category=category,
+            is_active=True
+        ).annotate(
+            mention_count=Count('route_attractions', distinct=True)
+        ).filter(mention_count__gt=0).order_by('-mention_count')[:limit_per_category]
+        
+        if attractions.exists():
+            result.append({
+                'category': category.name,
+                'category_id': category.id,
+                'attractions': [{
+                    'id': attr.id,
+                    'name': attr.name,
+                    'mention_count': attr.mention_count,
+                    'rating': float(attr.rating),
+                } for attr in attractions]
+            })
     
-    # Save to buffer
-    buffer = io.BytesIO()
-    plt.savefig(buffer, format='png', dpi=100, bbox_inches='tight')
-    buffer.seek(0)
-    plt.close()
+    return Response({'by_category': result})
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticatedOrReadOnly])
+def attraction_usage_trends(request):
+    """Get trends of attraction usage over time."""
+    days = int(request.query_params.get('days', 30))
+    start_date = timezone.now() - timedelta(days=days)
     
-    # Return as base64
-    image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-    return Response({'image': f'data:image/png;base64,{image_base64}'})
+    # Get routes created in the period
+    routes = Route.objects.filter(created_at__gte=start_date).values('created_at__date').annotate(
+        route_count=Count('id', distinct=True),
+        attraction_mentions=Count('route_attractions', distinct=True)
+    ).order_by('created_at__date')
+    
+    data = [{
+        'date': str(route['created_at__date']),
+        'routes_created': route['route_count'],
+        'attraction_mentions': route['attraction_mentions'],
+    } for route in routes]
+    
+    return Response({'trends': data})
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticatedOrReadOnly])
+def category_distribution_in_routes(request):
+    """Get distribution of categories in routes."""
+    # Count how many routes use each category
+    categories = Category.objects.annotate(
+        route_count=Count('attractions__route_attractions__route', distinct=True),
+        total_mentions=Count('attractions__route_attractions', distinct=True)
+    ).filter(route_count__gt=0).order_by('-route_count')
+    
+    data = [{
+        'category': cat.name,
+        'category_id': cat.id,
+        'route_count': cat.route_count,
+        'total_mentions': cat.total_mentions,
+    } for cat in categories]
+    
+    return Response({'distribution': data})
 
 
 @api_view(['GET'])
